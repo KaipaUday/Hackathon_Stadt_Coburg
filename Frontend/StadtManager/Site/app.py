@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import os
 import sqlite3
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
@@ -29,10 +30,15 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_CONTEXT_CHARS = 18_000
 ALLOWED_EXTENSIONS = {".csv", ".json", ".md", ".pdf", ".txt"}
 
+# Search service + extraction pipeline (see integrations.py)
+sys.path.insert(0, str(BASE_DIR))
+from integrations import router as integrations_router  # noqa: E402
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="StadtManager")
+app.include_router(integrations_router)
 
 
 @contextmanager
