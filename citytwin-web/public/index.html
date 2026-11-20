@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Coburg 3D</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<style>
+  html, body, #map { margin: 0; height: 100%; width: 100%; font-family: sans-serif; }
+  #title { position: absolute; top: 12px; left: 12px; z-index: 1; background: #fff;
+    padding: 8px 12px; border-radius: 8px; border: 0.5px solid #ccc; font-size: 14px; }
+  #title h1 { font-size: 18px; margin: 0; }
+  #title p { margin: 2px 0 0; color: #555; font-size: 12px; }
+
+  #bubble-btn { position: fixed; bottom: 20px; right: 20px; z-index: 2; border: none;
+    border-radius: 999px; padding: 12px 18px; background: #185FA5; color: #fff;
+    font-size: 14px; cursor: pointer; }
+  #panel { position: fixed; bottom: 76px; right: 20px; z-index: 2; width: 340px; height: 440px;
+    background: #fff; border: 0.5px solid #ccc; border-radius: 12px;
+    display: flex; flex-direction: column; font-size: 14px; }
+  #panel.hidden { display: none; }
+  #panel-head { display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 12px; border-bottom: 0.5px solid #ddd; font-weight: 500; }
+  #panel-head button { border: none; background: none; font-size: 18px; cursor: pointer; }
+  #log { flex: 1; overflow-y: auto; padding: 10px 12px; }
+  .msg { margin: 6px 0; padding: 8px 10px; border-radius: 10px; line-height: 1.5; white-space: pre-wrap; }
+  .you { background: #E6F1FB; margin-left: 30px; }
+  .bot { background: #F1EFE8; margin-right: 30px; }
+  #bar { display: flex; gap: 6px; padding: 8px; border-top: 0.5px solid #ddd; align-items: center; }
+  #prompt { flex: 1; padding: 8px; border: 0.5px solid #bbb; border-radius: 8px; min-width: 0; }
+  #bar button { padding: 8px 10px; border: 0.5px solid #bbb; background: #fff; border-radius: 8px; cursor: pointer; }
+  #mic.active { background: #FCEBEB; }
+</style>
+</head>
+<body>
+
+<div id="title">
+  <h1>Coburg</h1>
+  <p>3D buildings and streets · drag with right mouse button to tilt</p>
+</div>
+<div id="map"></div>
+
+<button id="bubble-btn">Ask about Coburg</button>
+
+<div id="panel" class="hidden">
+  <div id="panel-head">
+    <span>City assistant</span>
+    <button id="close" aria-label="Close">×</button>
+  </div>
+  <div id="log"></div>
+  <div id="bar">
+    <button id="plus" title="Attach a file">+</button>
+    <input type="file" id="file" hidden accept=".pdf,.docx,.xlsx,.txt,.csv,.md" />
+    <input id="prompt" placeholder="Type or speak..." />
+    <button id="mic" title="Speak">Mic</button>
+    <button id="send">Send</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+const map = new maplibregl.Map({
+  container: "map",
+  style: "https://tiles.openfreemap.org/styles/liberty",
+  center: [10.9644, 50.2643],
+  zoom: 16.5,
+  pitch: 60,
+  bearing: -20,
+  maxPitch: 85
+});
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+
+map.on("load", () => {
+  const labelLayer = map.getStyle().layers.find(l => l.type === "symbol" && l.layout && l.layout["text-field"]);
+  map.addLayer({
+    id: "buildings-3d",
+    type: "fill-extrusion",
+    source: "openmaptiles",
+    "source-layer": "building",
+    minzoom: 14,
+    paint: {
+      "fill-extrusion-color": "#d9d4c7",
+      "fill-extrusion-height": ["coalesce", ["get", "render_height"], 8],
+      "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+      "fill-extrusion-opacity": 0.95
+    }
+  }, labelLayer ? labelLayer.id : undefined);
+});
+</script>
+<script src="inspections.js"></script>
+
+<script>
+const $ = id => document.getElementById(id);
+const panel = $("panel"), log = $("log"), prompt = $("prompt");
+
+function addMsg(text, who) {
+  const div = document.createElement("div");
+  div.className = "msg " + who;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+$("bubble-btn").onclick = () => { panel.classList.toggle("hidden"); prompt.focus(); };
+$("close").onclick = () => panel.classList.add("hidden");
+
+async function send() {
+  const text = prompt.value.trim();
+  if (!text) return;
+  addMsg(text, "you");
+  prompt.value = "";
+  const waiting = addMsg("Thinking...", "bot");
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text })
+    });
+    const data = await res.json();
+    waiting.textContent = data.reply || data.error;
+  } catch {
+    waiting.textContent = "The assistant is unavailable right now.";
+  }
+}
+$("send").onclick = send;
+prompt.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+
+$("plus").onclick = () => $("file").click();
+$("file").onchange = async () => {
+  const file = $("file").files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  addMsg("Uploading " + file.name + "...", "bot");
+  try {
+    const res = await fetch("/api/upload", { method: "POST", body: form });
+    const data = await res.json();
+    addMsg(data.message || data.error, "bot");
+  } catch {
+    addMsg("Upload failed. Try again.", "bot");
+  }
+  $("file").value = "";
+};
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) {
+  $("mic").style.display = "none";
+} else {
+  const rec = new SR();
+  rec.lang = "en-US";
+  rec.interimResults = true;
+  rec.onresult = e => {
+    prompt.value = Array.from(e.results).map(r => r[0].transcript).join("");
+  };
+  rec.onend = () => $("mic").classList.remove("active");
+  $("mic").onclick = () => {
+    if ($("mic").classList.contains("active")) { rec.stop(); return; }
+    $("mic").classList.add("active");
+    rec.start();
+  };
+}
+</script>
+</body>
+</html>
