@@ -30,10 +30,26 @@ def get_open_events(building_id: int):
         "WHERE building_id = %s AND status <> 'closed'",
         (building_id,))
 
+def search_inspections(keyword: str):
+    k = f"%{keyword}%"
+    return _rows(
+        "SELECT report_id, building_id, site_address, "
+        "data->>'site_name' AS site_name, data->>'inspection_type' AS inspection_type, "
+        "data->>'equipment' AS equipment, data->>'inspection_date' AS inspection_date, "
+        "data->>'next_inspection_date' AS next_inspection_date, data->>'result' AS result, "
+        "data->>'defects' AS defects, data->>'company_name' AS company_name "
+        "FROM inspection_reports WHERE status = 'approved' AND ("
+        "site_address ILIKE %s OR data->>'site_name' ILIKE %s OR "
+        "data->>'inspection_type' ILIKE %s OR data->>'equipment' ILIKE %s OR "
+        "data->>'company_name' ILIKE %s) "
+        "ORDER BY data->>'next_inspection_date' NULLS LAST LIMIT 10",
+        (k, k, k, k, k))
+
 TOOL_FUNCS = {
     "search_buildings": search_buildings,
     "get_building": get_building,
     "get_open_events": get_open_events,
+    "search_inspections": search_inspections,
 }
 
 TOOLS = [
@@ -52,6 +68,13 @@ TOOLS = [
         "parameters": {"type": "object",
                        "properties": {"building_id": {"type": "integer"}},
                        "required": ["building_id"]}}},
+    {"type": "function", "function": {"name": "search_inspections",
+        "description": "Find reviewed maintenance/inspection reports (Wartung, Prüfung) by "
+                       "site, address, inspection type, equipment or company. Returns dates, "
+                       "next due date, result and defects",
+        "parameters": {"type": "object",
+                       "properties": {"keyword": {"type": "string"}},
+                       "required": ["keyword"]}}},
 ]
 
 SYSTEM = (
