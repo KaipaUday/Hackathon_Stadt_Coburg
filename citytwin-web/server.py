@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from agent import ask
+import llm
 import inspections
 
 app = FastAPI()
@@ -23,6 +24,8 @@ def chat(body: Chat):
         return {"error": "Send a question under 1000 characters."}
     try:
         return {"reply": ask(text)}
+    except llm.LLMError as e:
+        return {"error": str(e)}
     except Exception:
         return {"error": "The assistant is unavailable right now."}
 
@@ -41,7 +44,7 @@ async def upload(file: UploadFile = File(...)):
 # ------------------------------------------------ Wartung / inspection reports
 
 class Review(BaseModel):
-    fields: dict[str, str | None]
+    fields: dict  # core fields (strings) + "details" (free JSON object)
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
 
