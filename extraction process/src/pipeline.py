@@ -11,6 +11,7 @@ from src.extractors.pdf import extract as pdf_extract
 from src.extractors.image import extract as image_extract
 from src.extractors.excel import extract as excel_extract
 from src.extractors.email import extract as email_extract
+from src.extractors.docx import extract as docx_extract
 from src.extractors.text import extract as text_extract
 from src.extractors.specialized import (
     inspect_specialized,
@@ -37,6 +38,8 @@ def dispatch(path, original_name=None):
         return image_extract(path)
     if ext in EXCEL:
         return excel_extract(path)
+    if ext == ".docx":
+        return docx_extract(path)
     if ext == ".msg":
         return email_extract(path)
     if ext in TEXT:
