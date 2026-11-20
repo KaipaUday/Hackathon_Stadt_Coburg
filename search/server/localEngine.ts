@@ -520,6 +520,75 @@ function translateTextOffline(input: string, targetLang: 'de' | 'en'): string {
   return out;
 }
 
+// ---------------------------------------------------------------- LLM
+// Claude (ANTHROPIC_API_KEY) is used first, local Ollama (OLLAMA_URL) second.
+// Without either, the deterministic local engine below answers (no API key needed).
+
+function parseJsonLoose<T>(text: string): T | null {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start === -1 || end <= start) return null;
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1)) as T;
+    } catch {
+      return null;
+    }
+  }
+}
+
+const LLM_SYSTEM =
+  'You analyse documents of municipal buildings in Coburg (maintenance and inspection ' +
+  'reports, invoices, fire safety concepts, plans). Use ONLY the assets and passages ' +
+  'given in the prompt. Never invent dates, values or documents; if something is ' +
+  'missing, list it in data_gaps. Answer with one JSON object only, no code fences.';
+
+async function tryClaudeJson<T>(prompt: string): Promise<T | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!apiKey) return null;
+
+  const baseUrl = (process.env.ANTHROPIC_BASE_URL?.trim() || 'https://api.anthropic.com').replace(/\/$/, '');
+  const model = process.env.ANTHROPIC_MODEL?.trim() || process.env.LLM_MODEL?.trim() || 'claude-haiku-5-5';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90000);
+
+  try {
+    const res = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        max_tokens: 8192,
+        system: LLM_SYSTEM,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!res.ok) {
+      console.error(`Claude API error ${res.status}:`, (await res.text()).slice(0, 300));
+      return null;
+    }
+    const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+    const text = (data.content ?? [])
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text ?? '')
+      .join('');
+    return parseJsonLoose<T>(text);
+  } catch (err) {
+    console.error('Claude API call failed:', err);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function tryLocalOllamaJson<T>(prompt: string): Promise<T | null> {
   const ollamaUrl = process.env.OLLAMA_URL?.trim();
   if (!ollamaUrl) return null;
@@ -549,6 +618,10 @@ async function tryLocalOllamaJson<T>(prompt: string): Promise<T | null> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function tryLlmJson<T>(prompt: string): Promise<T | null> {
+  return (await tryClaudeJson<T>(prompt)) ?? (await tryLocalOllamaJson<T>(prompt));
 }
 
 export async function askKnowledgeBaseLocally(params: {
@@ -611,19 +684,26 @@ export async function askKnowledgeBaseLocally(params: {
     .slice(0, 8)
     .map((x) => x.hit);
 
-  // Optional local Ollama synthesis if OLLAMA_URL is explicitly configured
-  const ollamaResult = await tryLocalOllamaJson<{
+  // AI synthesis: Claude if ANTHROPIC_API_KEY is set, else Ollama if OLLAMA_URL is set
+  const ollamaResult = await tryLlmJson<{
     answer: string;
     findings: AnalysisFinding[];
     citations: SearchCitation[];
     data_gaps: string[];
     uncertainties_noted: string[];
   }>(
-    `Respond strictly in JSON with keys {answer, findings, citations, data_gaps, uncertainties_noted} in ${
-      lang === 'en' ? 'English' : 'German'
-    } for query "${params.query}". Assets: ${JSON.stringify(
-      selectedAssets
-    )}. Passages: ${JSON.stringify(scoredHits)}`
+    `Respond strictly in JSON in ${lang === 'en' ? 'English' : 'German'} for the query "${params.query}".
+Shape:
+{"answer": string (short, clear answer),
+ "findings": [{"title": string, "asset_id": string, "building": string,
+   "finding_type": "compliant"|"due_soon"|"overdue"|"missing_proof"|"defect_reported",
+   "detail": string, "doc_id": string, "quote": string}],
+ "citations": [{"doc_id": string, "filename": string, "doc_type": string,
+   "page_or_section": string, "quote": string (exact words from a passage, max 240 chars)}],
+ "data_gaps": [string], "uncertainties_noted": [string]}
+Only use asset_id and doc_id values that appear below.
+Assets: ${JSON.stringify(selectedAssets)}
+Passages: ${JSON.stringify(scoredHits)}`
   );
 
   if (ollamaResult && ollamaResult.answer) {
@@ -750,7 +830,7 @@ export async function translateDocumentLocally(
   doc: DocumentRecord,
   targetLanguage: 'de' | 'en'
 ): Promise<TranslatedDocumentView> {
-  const ollamaTranslated = await tryLocalOllamaJson<{
+  const ollamaTranslated = await tryLlmJson<{
     summary: string;
     extracted_facts: ExtractedFact[];
     chunks: Array<{ chunk_id: string; page_or_section: string; text: string }>;
