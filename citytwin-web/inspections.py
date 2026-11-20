@@ -3,7 +3,7 @@
 Steps:
 1. Read the PDF text with PyMuPDF. Pages with (almost) no text are scans
    and are read with Tesseract OCR instead.
-2. Ask the local LLM (Ollama) to fill in the fields as JSON. It is told to
+2. Ask the LLM (cloud API key or local Ollama, see llm.py) to fill in the fields as JSON. It is told to
    take the address of the inspected SITE, not the letterhead/company address.
 3. All street addresses found in the text are also returned as "candidates",
    so the reviewer can pick another one with one click.
@@ -23,12 +23,11 @@ import uuid
 from pathlib import Path
 
 import fitz  # PyMuPDF
-import ollama
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
+import llm
 STORE = Path("uploads/inspections")
 STORE.mkdir(parents=True, exist_ok=True)
 
@@ -36,8 +35,8 @@ STORE.mkdir(parents=True, exist_ok=True)
 # (a login user that is a member of city_editor). agent.py keeps its read-only user.
 WRITE_DB = (
     "host=localhost port=5432 dbname=citytwin "
-    f"user={os.environ.get('DB_EDITOR_USER', 'postgres')} "
-    f"password={os.environ.get('DB_PASSWORD', '')}"
+    f"user={os.environ.get('DB_EDITOR_USER', 'city_writer')} "
+    f"password={os.environ.get('DB_EDITOR_PASSWORD', '')}"
 )
 
 # Around Coburg (left, top, right, bottom) - used to prefer local results.
@@ -62,6 +61,7 @@ FIELDS = {
 }
 RESULTS = ["ohne Mängel", "mit Mängeln", "unbekannt"]
 MAX_FIELD_LEN = 2000
+MAX_DETAILS_CHARS = 20000  # size limit for the free "details" object (as JSON text)
 
 
 # ---------------------------------------------------------------- text
@@ -118,7 +118,7 @@ def address_candidates(text: str) -> list[str]:
 
 PROMPT = """You read German maintenance and inspection reports (Wartungsprotokoll,
 Prüfbericht, Prüfbescheinigung) and return ONLY a JSON object with these keys:
-{keys}
+{keys}, details
 
 Rules:
 - site_address is the address of the place WHERE the inspection happened
@@ -131,6 +131,11 @@ Rules:
 - result must be one of: {results}.
 - defects: short summary of the Mängel, or "" if none.
 - If a value is not in the text, use "". Never guess or invent values.
+- details is a free JSON object with EVERYTHING else that matters in this report,
+  in whatever structure fits it best: checked items/devices and their status,
+  measured values with units, norms (DIN/VDE/DGUV), rooms/floors, list of defects
+  with location and deadline, recommendations, contract or order numbers, signatures.
+  Use short German or English keys. Keep the values exactly as written in the report.
 
 Report text:
 \"\"\"
@@ -139,15 +144,27 @@ Report text:
 """
 
 
-def llm_fields(text: str) -> dict:
-    prompt = PROMPT.format(keys=", ".join(FIELDS), results=", ".join(RESULTS), text=text[:12000])
+def llm_fields(text: str) -> tuple[dict, str | None]:
+    """Returns (fields, error). On error the fields are empty and the reviewer
+    sees the error message, so they can fill the form by hand."""
+    limit = 60000 if llm.PROVIDER == "cloud" else 12000  # cloud models take long texts
+    prompt = PROMPT.format(keys=", ".join(FIELDS), results=", ".join(RESULTS), text=text[:limit])
     try:
-        reply = ollama.chat(model=MODEL, format="json", options={"temperature": 0},
-                            messages=[{"role": "user", "content": prompt}])
-        raw = json.loads(reply["message"]["content"])
-    except Exception:
-        raw = {}
-    return clean_fields(raw)
+        _, answer, _ = llm.chat([{"role": "user", "content": prompt}], json_mode=True)
+        return clean_fields(json.loads(answer)), None
+    except json.JSONDecodeError:
+        return clean_fields({}), "The AI answer was not valid JSON. Please fill in the fields."
+    except llm.LLMError as e:
+        return clean_fields({}), str(e)
+
+
+def clean_details(details) -> dict:
+    """The free object from the AI: any JSON structure, only checked for type and size."""
+    if not isinstance(details, dict):
+        return {}
+    if len(json.dumps(details, ensure_ascii=False)) > MAX_DETAILS_CHARS:
+        return {"_note": "details were too large and were dropped"}
+    return details
 
 
 def clean_fields(raw: dict) -> dict:
@@ -157,6 +174,7 @@ def clean_fields(raw: dict) -> dict:
         out[key] = ("" if val is None else str(val)).strip()[:MAX_FIELD_LEN]
     if out["result"] not in RESULTS:
         out["result"] = "unbekannt"
+    out["details"] = clean_details(raw.get("details") if isinstance(raw, dict) else None)
     return out
 
 
@@ -216,13 +234,14 @@ def create_draft(original_name: str, data: bytes) -> dict:
     path.write_bytes(data)
 
     text, method = pdf_text(path)
-    fields = llm_fields(text)
+    fields, llm_error = llm_fields(text)
     candidates = address_candidates(text)
     if not fields["site_address"] and candidates:
         fields["site_address"] = candidates[0]
     point = geocode(fields["site_address"]) if fields["site_address"] else None
 
-    extracted = {**fields, "_candidates": candidates}
+    extracted = {**fields, "_candidates": candidates,
+                 "_model": f"{llm.PROVIDER}:{llm.MODEL}", "_error": llm_error}
     with _db() as conn:
         row = conn.execute(
             """INSERT INTO inspection_reports
@@ -247,6 +266,8 @@ def get(report_id: int) -> dict | None:
                FROM inspection_reports WHERE report_id=%s""", (report_id,)).fetchone()
     if r:
         r["candidates"] = r["extracted"].get("_candidates", [])
+        r["model"] = r["extracted"].get("_model")
+        r["llm_error"] = r["extracted"].get("_error")
         r["fields"] = FIELDS
         r["results"] = RESULTS
     return r
