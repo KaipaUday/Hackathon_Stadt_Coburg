@@ -28,7 +28,10 @@
   .insp-pop h3 { margin: 0 0 4px; font-size: 14px; }
   .insp-pop dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 12px; }
   .insp-pop dt { color: #666; } .insp-pop dd { margin: 0; }
-  .insp-pop a { display: inline-block; margin-top: 6px; }`;
+  .insp-pop a { display: inline-block; margin-top: 6px; }
+  .insp-pop details { margin-top: 6px; font-size: 12px; max-height: 220px; overflow-y: auto; }
+  .insp-pop ul { margin: 2px 0; padding-left: 16px; }
+  #insp-details { font-family: ui-monospace, monospace; font-size: 12px; }`;
   document.head.appendChild(Object.assign(document.createElement("style"), { textContent: css }));
 
   const el = (tag, props = {}, ...kids) => {
@@ -107,7 +110,8 @@
     const body = el("div", { id: "insp-body" });
 
     body.append(el("p", { className: "insp-hint",
-      textContent: `Read with ${r.extraction_method || "?"}. Check every field against the PDF and fix anything misread. Changed fields turn yellow.` }),
+      textContent: `Text read with ${r.extraction_method || "?"}, fields filled by ${r.model || "?"}. Check every field against the PDF and fix anything misread. Changed fields turn yellow.` }),
+      r.llm_error ? el("p", { className: "insp-hint insp-warn", textContent: "AI could not read the fields: " + r.llm_error }) : "",
       el("a", { href: `/api/inspections/${r.report_id}/file`, target: "_blank", textContent: "Open the PDF ↗" }));
 
     for (const [key, label] of Object.entries(r.fields)) {
@@ -157,6 +161,20 @@
       }
     }
 
+    // Free "details" object: whatever else the AI found in this PDF.
+    const detailsBox = el("textarea", { id: "insp-details", rows: 12,
+      value: JSON.stringify((r.data || {}).details || {}, null, 2) });
+    const originalDetails = JSON.stringify(extracted.details || {}, null, 2);
+    const detailsStatus = el("div", { className: "insp-hint" });
+    detailsBox.oninput = () => {
+      detailsBox.classList.toggle("changed", detailsBox.value !== originalDetails);
+      try { JSON.parse(detailsBox.value || "{}"); detailsStatus.textContent = ""; detailsStatus.classList.remove("insp-warn"); }
+      catch { detailsStatus.textContent = "Not valid JSON yet (check commas and quotes)."; detailsStatus.classList.add("insp-warn"); }
+    };
+    detailsBox.oninput();
+    body.append(el("label", { textContent: "Other details (free JSON – everything else the AI found)" }),
+      detailsBox, detailsStatus);
+
     if (r.lat != null && r.lon != null) {
       placeDraft(r.lon, r.lat);
     } else {
@@ -171,6 +189,14 @@
     accept.onclick = async () => {
       const pos = draftMarker.getLngLat();
       const fields = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value]));
+      try {
+        const d = JSON.parse(detailsBox.value || "{}");
+        if (typeof d !== "object" || d === null || Array.isArray(d)) throw new Error();
+        fields.details = d;
+      } catch {
+        alert("The details are not valid JSON. Please fix them first.");
+        return;
+      }
       accept.disabled = true;
       try {
         const res = await fetch(`/api/inspections/${r.report_id}/approve`, { method: "POST",
@@ -202,6 +228,21 @@
 
   // ---------- pins for accepted reports
   let pins = [];
+  // Render any JSON value as a nested list (text only, no HTML injection).
+  function renderValue(v) {
+    if (v === null || v === undefined || v === "") return document.createTextNode("–");
+    if (typeof v !== "object") return document.createTextNode(String(v));
+    const ul = el("ul");
+    const entries = Array.isArray(v) ? v.map((x, i) => [null, x]) : Object.entries(v);
+    entries.forEach(([k, x]) => {
+      const li = el("li");
+      if (k !== null) li.append(el("b", { textContent: k + ": " }));
+      li.append(renderValue(x));
+      ul.append(li);
+    });
+    return ul;
+  }
+
   function popupFor(p) {
     const rows = [["Type", p.inspection_type], ["Equipment", p.equipment], ["Address", p.site_address],
       ["Inspected", p.inspection_date], ["Next due", p.next_inspection_date], ["Result", p.result],
@@ -213,6 +254,8 @@
       el("h3", { textContent: p.site_name || p.site_address || p.original_name }),
       overdue ? el("div", { className: "insp-warn", textContent: "Next inspection is overdue" }) : "",
       dl,
+      p.details && Object.keys(p.details).length
+        ? el("details", {}, el("summary", { textContent: "More details" }), renderValue(p.details)) : "",
       el("a", { href: `/api/inspections/${p.report_id}/file`, target: "_blank",
         textContent: "📎 " + p.original_name }));
   }
