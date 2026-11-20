@@ -38,6 +38,14 @@
             <svg viewBox="0 0 24 24"><path d="M12 3 14.2 9.8 21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2L12 3z"/><path d="m19 3 .8 2.2L22 6l-2.2.8L19 9l-.8-2.2L16 6l2.2-.8L19 3z"/></svg>
             AI assistant
           </a>
+          <a class="nav-item" href="#doc-search">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            Document search
+          </a>
+          <a class="nav-item" href="#documents">
+            <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><path d="m17 16 2 2 3-4"/></svg>
+            Document pipeline <span class="nav-count" id="pipeline-count">0</span>
+          </a>
         </nav>
         <div class="sidebar-bottom">
           <div class="secure-note">
@@ -229,6 +237,31 @@
             <p class="map-attribution">Map data © OpenStreetMap contributors · Tiles by OpenFreeMap</p>
           </section>
 
+          <section class="integration-section" id="doc-search" aria-labelledby="doc-search-title">
+            <div class="map-section-heading">
+              <div>
+                <div class="section-kicker">KNOWLEDGE BASE</div>
+                <h2 id="doc-search-title">Search documents</h2>
+                <p>Ask questions across all indexed documents and get answers with sources, or check the status of every asset (inspections due, overdue, missing proof).</p>
+              </div>
+              <span class="map-building-count" id="search-summary">Search service</span>
+            </div>
+            <div class="int-tabs" id="search-tabs" role="tablist"></div>
+            <div class="int-body" id="search-body"></div>
+          </section>
+
+          <section class="integration-section" id="documents" aria-labelledby="documents-title">
+            <div class="map-section-heading">
+              <div>
+                <div class="section-kicker">EXTRACTION PIPELINE</div>
+                <h2 id="documents-title">Document pipeline</h2>
+                <p>Upload any file — scans (read with OCR), Excel, Word, e-mails, large PDFs. The text is extracted in the background, stored in the database and added to the document search. Check it, set a title and category, then approve.</p>
+              </div>
+              <span class="map-building-count" id="pipeline-summary">0 documents</span>
+            </div>
+            <div class="int-body" id="pipeline-body"></div>
+          </section>
+
           <footer class="footer"><span><span class="footer-mark">S</span> StadtManager <span class="footer-divider">·</span> A clearer view of your city</span><span>Built for thoughtful decisions.</span></footer>
         </div>
       </main>
@@ -236,5 +269,6 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
     <script src="/app.js" defer></script>
+    <script src="/integrations.js" defer></script>
   </body>
 </html>
