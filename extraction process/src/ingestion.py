@@ -52,10 +52,24 @@ def ingest_one(source: Path):
 
     return {"file_id": fid, "duplicate": False, "storage_key": rel.as_posix(), "sha256": digest}
 
+
 def scan_and_ingest(folder):
+    ignored_names = {".gitkeep", "desktop.ini", "thumbs.db"}
+
     for p in Path(folder).rglob("*"):
-        if p.is_file():
-            try:
-                yield {"source": str(p), **ingest_one(p)}
-            except Exception as e:
-                yield {"source": str(p), "error": str(e)}
+        if not p.is_file():
+            continue
+
+        # Ignore Windows and repository placeholder files
+        if p.name.lower() in ignored_names:
+            continue
+
+        # Ignore temporary Office files
+        if p.name.startswith("~$"):
+            continue
+
+        try:
+            yield {"source": str(p), **ingest_one(p)}
+        except Exception as e:
+            yield {"source": str(p), "error": str(e)}
+
