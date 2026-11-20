@@ -155,7 +155,13 @@ def process_file(file_id):
                         "page": page.get("page_number"),
                         "content": content
                     })
-
+                   
+            db.execute(text("""
+                DELETE FROM extracted_data
+                    WHERE file_id = :fid
+                    AND data_category = 'document_extraction'
+            """), {"fid": file_id})
+	  
             db.execute(text("""
                 INSERT INTO extracted_data
                     (file_id, data_category, data_key, data_value)

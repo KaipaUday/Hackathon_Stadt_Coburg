@@ -15,6 +15,7 @@ STORAGE_DIR = path_setting("STORAGE_DIR", "./storage")
 LOG_DIR = path_setting("LOG_DIR", "./logs")
 REPORT_DIR = path_setting("REPORT_DIR", "./reports")
 TESSERACT_CMD = os.getenv("TESSERACT_CMD", "")
+TESSDATA_PREFIX = os.getenv("TESSDATA_PREFIX", "")
 OCR_LANGUAGES = os.getenv("OCR_LANGUAGES", "eng+deu")
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "500"))
 
