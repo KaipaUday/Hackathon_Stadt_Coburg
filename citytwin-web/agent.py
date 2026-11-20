@@ -1,7 +1,6 @@
 import json, os
-import ollama, psycopg
-
-MODEL = "qwen2.5:7b"
+import psycopg
+import llm
 DB = (f"host=localhost port=5432 dbname=citytwin "
       f"user=agent_reader password={os.environ['DB_PASSWORD']}")
 
@@ -41,15 +40,26 @@ def search_inspections(keyword: str):
         "FROM inspection_reports WHERE status = 'approved' AND ("
         "site_address ILIKE %s OR data->>'site_name' ILIKE %s OR "
         "data->>'inspection_type' ILIKE %s OR data->>'equipment' ILIKE %s OR "
-        "data->>'company_name' ILIKE %s) "
+        "data->>'company_name' ILIKE %s OR "
+        "data->'details'::text ILIKE %s OR raw_text ILIKE %s) "
         "ORDER BY data->>'next_inspection_date' NULLS LAST LIMIT 10",
-        (k, k, k, k, k))
+        (k, k, k, k, k, k, k))
+
+def get_inspection(report_id: int):
+    """All data of one accepted report, including the free 'details' object
+    and the start of the original PDF text."""
+    return _rows(
+        "SELECT report_id, original_name, building_id, data, "
+        "left(raw_text, 6000) AS pdf_text "
+        "FROM inspection_reports WHERE report_id = %s AND status = 'approved'",
+        (report_id,))
 
 TOOL_FUNCS = {
     "search_buildings": search_buildings,
     "get_building": get_building,
     "get_open_events": get_open_events,
     "search_inspections": search_inspections,
+    "get_inspection": get_inspection,
 }
 
 TOOLS = [
@@ -75,6 +85,14 @@ TOOLS = [
         "parameters": {"type": "object",
                        "properties": {"keyword": {"type": "string"}},
                        "required": ["keyword"]}}},
+    {"type": "function", "function": {"name": "get_inspection",
+        "description": "Everything about one inspection report by its report_id: all fields, "
+                       "a free 'details' object (checked devices, measured values, norms, "
+                       "defects with location and deadline, ...) and the original PDF text. "
+                       "Use it after search_inspections to answer detailed questions",
+        "parameters": {"type": "object",
+                       "properties": {"report_id": {"type": "integer"}},
+                       "required": ["report_id"]}}},
 ]
 
 SYSTEM = (
@@ -88,17 +106,15 @@ def ask(question: str) -> str:
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "user", "content": question}]
     for _ in range(6):
-        reply = ollama.chat(model=MODEL, messages=messages, tools=TOOLS)
-        msg = reply["message"]
+        msg, text, calls = llm.chat(messages, tools=TOOLS)
         messages.append(msg)
-        if not msg.get("tool_calls"):
-            return msg["content"]
-        for call in msg["tool_calls"]:
-            fn = TOOL_FUNCS.get(call["function"]["name"])
+        if not calls:
+            return text
+        for call_id, name, args in calls:
+            fn = TOOL_FUNCS.get(name)
             try:
-                result = fn(**call["function"]["arguments"]) if fn else {"error": "unknown tool"}
+                result = fn(**args) if fn else {"error": "unknown tool"}
             except Exception as e:
                 result = {"error": str(e)}
-            messages.append({"role": "tool",
-                             "content": json.dumps(result, default=str)})
-    return
+            messages.append(llm.tool_result(call_id, json.dumps(result, default=str)))
+    return "Sorry, I could not finish that answer. Try asking more specifically."
