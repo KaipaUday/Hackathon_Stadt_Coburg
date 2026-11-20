@@ -75,3 +75,83 @@ New terminal windows will load these settings automatically. The current app
 uses local SQLite, so the `DB_*` examples aren't used. Set
 `STADTMANAGER_DB_PATH` if you want to store the SQLite database at a different
 local path.
+
+## Document search and document pipeline
+
+Two extra sections (sidebar: **Document search**, **Document pipeline**) connect
+StadtManager to the team's other parts in this repository. They are optional:
+if a part isn't running, only its section shows a message.
+
+| Section | Uses | Needs |
+|---|---|---|
+| Document search | `search/` (Node service, port 3000) | `npm run dev` in `search/` |
+| Document pipeline | `extraction process/` (Postgres, OCR, Excel) | `extraction process/.env` |
+
+The code is in `Site/integrations.py` (routes), `Site/pipeline_bridge.py`
+(calls the pipeline) and `Site/Public/integrations.js` (UI).
+
+### 1. Install
+
+From the repository root (Node.js 22+ and Python 3.12):
+
+```bash
+cd search && npm install && cd ..
+python -m pip install -r Frontend/StadtManager/requirements.txt
+python -m pip install -r "extraction process/requirements.txt"
+```
+
+Windows PowerShell: if `npm` is blocked, use `npm.cmd`.
+
+### 2. Settings
+
+`search/.env` (Claude writes the search answers; without it search uses its
+local engine):
+
+```
+ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+`extraction process/.env` (database of the pipeline; Tesseract only for scans):
+
+```
+DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/citytwin
+TESSERACT_CMD=C:\\Program Files\\Tesseract-OCR\\tesseract.exe
+TESSDATA_PREFIX=C:\\Program Files\\Tesseract-OCR\\tessdata
+OCR_LANGUAGES=deu+eng
+```
+
+Optional for StadtManager: `SEARCH_URL` (default `http://localhost:3000`) and
+`EXTRACTION_DIR` (default: `extraction process/` in the repository root).
+
+### 3. Start (two terminals)
+
+```bash
+# Terminal 1 – search service
+cd search
+npm run dev
+
+# Terminal 2 – StadtManager (from Frontend/StadtManager)
+python -m uvicorn app:app --app-dir Site --reload
+```
+
+### What you can do
+
+- **Document search → Ask:** question across all documents → answer with
+  findings, sources (file, page, quote), missing data and uncertainties.
+  **Find passages:** keyword search with snippets.
+- **Document search → Assets:** equipment with inspection status (OK, due soon,
+  overdue, proof missing, defect), filter by building, status or *Needs review*.
+- **Document pipeline:** upload any file (also scans, Excel, Word, e-mails,
+  files over 5 MB) → read in the background → check the extracted text, set
+  title and category → **Save & approve**. Each upload is also added to the
+  document search.
+
+### Troubleshooting
+
+| Message | Fix |
+|---|---|
+| "The search service is not running" | Start terminal 1, or set `SEARCH_URL` |
+| Search answers start with "Lokale Auswertung …" | No/invalid `ANTHROPIC_API_KEY` in `search/.env` (see terminal 1) |
+| "Extraction pipeline is not set up: DATABASE_URL missing" | Create `extraction process/.env` |
+| Document status *Failed*: "TESSERACT_CMD … is not configured" | Scanned file: set both Tesseract lines in `extraction process/.env` |
+| "column … does not exist" | The pipeline tables in the database are older than the pipeline code |
